@@ -1,0 +1,140 @@
+trigger: none
+
+parameters:
+  - name: pipelines
+    type: object
+    displayName: 'List of pipeline runs to combine'
+    default:
+      - definitionId: 2623
+        buildId: 162546
+        artifactName: 'BLC_WWS'
+      - definitionId: 2622
+        buildId: 162547
+        artifactName: 'BLC_WWS'
+      - definitionId: 2624
+        buildId: 162548
+        artifactName: 'BLC_WWS'
+
+stages:
+  - stage: MergeJTL
+    displayName: "Combine JMeter Results"
+    jobs:
+      - job: Merge
+        displayName: "Download, Merge, Validate and Generate JMeter HTML Report"
+        pool:
+          vmImage: ubuntu-latest
+        steps:
+          # Step 1: Install JMeter only (no CMDRunner needed)
+          - script: |
+              echo "Installing JMeter and dependencies..."
+              sudo apt-get update -y
+              sudo apt-get install -y openjdk-11-jdk wget unzip tzdata
+
+              echo "Setting timezone to Asia/Dubai (GST)..."
+              sudo timedatectl set-timezone Asia/Dubai
+              echo "Current timezone:"
+              timedatectl
+
+              echo "Downloading JMeter..."
+              wget https://downloads.apache.org/jmeter/binaries/apache-jmeter-5.6.3.zip
+              unzip apache-jmeter-5.6.3.zip
+
+              echo "JMeter installation completed."
+            workingDirectory: $(Build.SourcesDirectory)
+            displayName: "Install JMeter and Set GST Timezone"
+
+          # Step 2: Download all artifacts
+          - ${{ each item in parameters.pipelines }}:
+              - template: templates/download-artifact.yml
+                parameters:
+                  definitionId: ${{ item.definitionId }}
+                  buildId: ${{ item.buildId }}
+                  artifactName: ${{ item.artifactName }}
+
+          # Step 3: Debug listing all downloaded JTL files recursively
+          - script: |
+              echo "Listing all downloaded JTL files recursively:"
+              find $(Pipeline.Workspace)/artifacts -type f -name "*.jtl"
+            displayName: "Debug: List downloaded JTL files"
+            workingDirectory: $(Build.SourcesDirectory)
+
+          # Step 4: Merge JTL files recursively with header normalization and validation
+          - script: |
+              echo "Preparing to merge JTL files by concatenation..."
+              rm -rf jtl_files
+              mkdir -p jtl_files
+
+              count=0
+              for dir in $(find $(Pipeline.Workspace)/artifacts -mindepth 1 -maxdepth 1 -type d); do
+                count=$((count + 1))
+                find "$dir" -type f -name "*.jtl" | while read -r f; do
+                  base=$(basename "$f")
+                  cp "$f" "jtl_files/${base%.jtl}_$count.jtl"
+                  echo "Copied $f to jtl_files/${base%.jtl}_$count.jtl"
+                done
+              done
+
+              echo "JTL files found:"
+              ls -lh jtl_files/*.jtl || (echo "No JTL files found." && exit 1)
+
+              echo "Normalizing headers in all JTL files..."
+              canonical_header="timeStamp,elapsed,label,responseCode,responseMessage,threadName,dataType,success,failureMessage,bytes,sentBytes,grpThreads,allThreads,URL,Latency,IdleTime,Connect"
+
+              for f in jtl_files/*.jtl; do
+                sed -i "1s/.*/$canonical_header/" "$f"
+              done
+
+              echo "Checking headers of all JTL files (after normalization):"
+              head -n 1 jtl_files/*.jtl | sort | uniq -c
+
+              first_file=$(ls jtl_files/*.jtl | head -n 1)
+              echo "Using header from: $first_file"
+
+              head -n 1 "$first_file" > combined.jtl
+
+              total_samples=0
+              for f in jtl_files/*.jtl; do
+                sample_count=$(tail -n +2 "$f" | wc -l)
+                echo "Appending $sample_count samples from $f"
+                tail -n +2 "$f" >> combined.jtl
+                total_samples=$((total_samples + sample_count))
+              done
+
+              echo "Combined JTL file created with $total_samples samples."
+              ls -lh combined.jtl
+
+              if [ "$total_samples" -eq 0 ]; then
+                echo "❌ No samples found in combined JTL!"
+                exit 1
+              fi
+
+              echo "Preview first 10 lines of combined.jtl:"
+              head -n 10 combined.jtl
+              echo "Preview last 10 lines of combined.jtl:"
+              tail -n 10 combined.jtl
+
+              echo "✅ JTL files merged successfully."
+            workingDirectory: $(Build.SourcesDirectory)
+            displayName: "Manually Merge JTL Files with Header Normalization"
+
+          # Step 5: Generate HTML report from combined JTL with GST timezone
+          - script: |
+              echo "Generating JMeter HTML report from combined.jtl with GST timezone..."
+              export TZ=Asia/Dubai
+              JMETER_HOME=$(Build.SourcesDirectory)/apache-jmeter-5.6.3
+              export PATH=$JMETER_HOME/bin:$PATH
+
+              echo "Current timezone: $(date)"
+              jmeter -g combined.jtl -o jmeter-report
+
+              echo "✅ HTML report generated successfully."
+            workingDirectory: $(Build.SourcesDirectory)
+            displayName: "Generate HTML Report from Combined JTL (GST timezone)"
+
+          # Step 6: Publish HTML report as artifact
+          - task: PublishPipelineArtifact@1
+            inputs:
+              targetPath: 'jmeter-report'
+              artifact: 'Combined-JMeter-Report'
+              publishLocation: 'pipeline'
+            displayName: "Publish Combined JMeter HTML Report"
