@@ -7,13 +7,13 @@ parameters:
     default:
       - definitionId: 2623
         buildId: 162546
-        artifactName: 'BLC_WWS'
+        artifactName: 'Test1'
       - definitionId: 2622
         buildId: 162547
-        artifactName: 'BLC_WWS'
+        artifactName: 'Test2'
       - definitionId: 2624
         buildId: 162548
-        artifactName: 'BLC_WWS'
+        artifactName: 'Test3'
 
 stages:
   - stage: MergeJTL
@@ -137,4 +137,5 @@ stages:
               targetPath: 'jmeter-report'
               artifact: 'Combined-JMeter-Report'
               publishLocation: 'pipeline'
+
             displayName: "Publish Combined JMeter HTML Report"
