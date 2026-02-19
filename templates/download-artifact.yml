@@ -1,0 +1,19 @@
+parameters:
+  - name: definitionId
+    type: string
+  - name: buildId
+    type: string
+  - name: artifactName
+    type: string
+
+steps:
+  - task: DownloadPipelineArtifact@2
+    inputs:
+      buildType: 'specific'
+      project: '$(System.TeamProject)'
+      pipeline: ${{ parameters.definitionId }}
+      runVersion: 'specific'
+      runId: ${{ parameters.buildId }}
+      artifact: ${{ parameters.artifactName }}
+      targetPath: '$(Pipeline.Workspace)/artifacts/def_${{ parameters.definitionId }}_build_${{ parameters.buildId }}'
+    displayName: "Download Artifact: Definition ${{ parameters.definitionId }} | Build ${{ parameters.buildId }}"
